@@ -2,8 +2,11 @@ import { Key } from 'aws-cdk-lib/aws-kms';
 import { App, Stack, StackProps, RemovalPolicy, Duration } from 'aws-cdk-lib';
 import { LoggingProtocol, Topic, TracingConfig } from 'aws-cdk-lib/aws-sns';
 import { ManagedPolicy, PolicyDocument, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import * as integ from '@aws-cdk/integ-tests-alpha';
 
 class SNSInteg extends Stack {
+  public readonly encryptedTopic: Topic;
+
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -62,19 +65,44 @@ class SNSInteg extends Stack {
     const topic2 = new Topic(this, 'MyTopic2', {
       topicName: 'fooTopic2',
       displayName: 'fooDisplayName2',
-      masterKey: key,
     });
-    const importedTopic = Topic.fromTopicArn(this, 'ImportedTopic', topic2.topicArn);
+    const importedTopic2 = Topic.fromTopicArn(this, 'ImportedTopic2', topic2.topicArn);
 
     const publishRole = new Role(this, 'PublishRole', {
       assumedBy: new ServicePrincipal('s3.amazonaws.com'),
     });
-    importedTopic.grantPublish(publishRole);
+    importedTopic2.grantPublish(publishRole);
+
+    // Can import encrypted topic by attributes
+    const topic3 = new Topic(this, 'MyTopic3', {
+      topicName: 'fooTopic3',
+      displayName: 'fooDisplayName3',
+      masterKey: key,
+    });
+    const importedTopic3 = Topic.fromTopicAttributes(this, 'ImportedTopic3', {
+      topicArn: topic3.topicArn,
+      keyArn: key.keyArn,
+    });
+    importedTopic3.grantPublish(publishRole);
+    this.encryptedTopic = topic3;
   }
 }
 
 const app = new App();
 
-new SNSInteg(app, 'SNSInteg');
+const stack = new SNSInteg(app, 'SNSInteg');
+
+const testCase = new integ.IntegTest(app, 'SNSTest', {
+  testCases: [stack],
+});
+
+const publishMessage = testCase.assertions.awsApiCall('aws-sns', 'PublishMessage', {
+  topicArn: stack.encryptedTopic.topicArn,
+  message: 'hello world',
+});
+
+publishMessage.expect(integ.ExpectedResult.objectLike({
+  MessageId: integ.ExpectedResult.stringLikeRegexp('.+'),
+}));
 
 app.synth();
